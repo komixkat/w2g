@@ -7,6 +7,9 @@
 
   if (isReducedMotion) return;
 
+  // No cursor on touch screens: don't run an animation loop for nothing.
+  if (window.matchMedia("(pointer: coarse)").matches) return;
+
   const nekoEl = document.createElement("div");
   let persistPosition = true;
 

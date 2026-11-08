@@ -8,11 +8,25 @@ const COMPRESS = typeof CompressionStream !== 'undefined';
    code inside the message limit of typical chat apps. */
 const STRIP = /^(a=ssrc|a=msid|a=msid-semantic|a=extmap-allow-mixed|a=rtcp:|a=ice-options)/;
 
+/* Header extensions matter: transport-cc drives the bandwidth estimate and
+   mid keeps bundled RTP demuxable. The rest (orientation, playout-delay,
+   color-space, …) can be left out. */
+const KEEP_EXTMAP = /^a=extmap:\d+ (urn:ietf:params:rtp-hdrext:sdes:mid|http:\/\/www\.ietf\.org\/id\/draft-holmer-rmcat-transport-wide-cc-extensions-01)$/;
+
 function minify(sdp) {
-  return String(sdp)
-    .split('\r\n')
-    .filter(line => !STRIP.test(line))
-    .join('\r\n');
+  const out = [];
+  let section = -1;
+  for (const line of String(sdp).split('\r\n')) {
+    if (line.startsWith('m=')) section++;
+    if (STRIP.test(line)) continue;
+    if (line.startsWith('a=extmap') && !KEEP_EXTMAP.test(line)) continue;
+    // BUNDLE means every section shares one transport; candidates from the
+    // first section are enough. Repeating them in each section triples that
+    // part of the code.
+    if (line.startsWith('a=candidate:') && section > 0) continue;
+    out.push(line);
+  }
+  return out.join('\r\n');
 }
 
 function toB64(bytes) {
@@ -42,17 +56,24 @@ export async function pack(desc) {
   return 'z.' + toB64(out);
 }
 
+/** Pull the code out of a pasted link, or accept a bare code. */
+function extractCode(input) {
+  const text = String(input || '').trim();
+  const linked = text.match(/#(?:i|r)\.([A-Za-z0-9_.-]+)/);
+  return linked ? linked[1] : text.replace(/\s+/g, '');
+}
+
 /** Decode a code back into { type, sdp }. Throws on anything malformed. */
 export async function unpack(code) {
-  const clean = String(code || '').replace(/\s+/g, '');
-  if (clean.length < 8) throw new Error('that code looks too short');
+  const clean = extractCode(code);
+  if (clean.length < 8) throw new Error('code is too short');
 
   const mode = clean.slice(0, 2);
-  if (mode !== 'z.' && mode !== 'p.') throw new Error('that is not a w2g code');
+  if (mode !== 'z.' && mode !== 'p.') throw new Error('not a w2g code');
 
   let bytes = fromB64(clean.slice(2));
   if (mode === 'z.') {
-    if (!COMPRESS) throw new Error('this browser cannot read compressed codes');
+    if (!COMPRESS) throw new Error('browser cannot read compressed codes');
     const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('deflate-raw'));
     bytes = new Uint8Array(await new Response(stream).arrayBuffer());
   }
@@ -61,9 +82,9 @@ export async function unpack(code) {
   try {
     msg = JSON.parse(new TextDecoder().decode(bytes));
   } catch {
-    throw new Error('that code is incomplete or corrupted');
+    throw new Error('code is incomplete or corrupted');
   }
-  if (!msg || msg.t !== TAG || !msg.sdp || !msg.type) throw new Error('that is not a w2g code');
+  if (!msg || msg.t !== TAG || !msg.sdp || !msg.type) throw new Error('not a w2g code');
   return { type: msg.type, sdp: msg.sdp };
 }
 

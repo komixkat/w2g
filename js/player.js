@@ -17,7 +17,7 @@ export class LocalPlayer {
   async load(file) {
     this.release();
 
-    if (!URL.createObjectURL) throw new Error('this browser cannot open local files');
+    if (!URL.createObjectURL) throw new Error('browser cannot open local files');
 
     this.url = URL.createObjectURL(file);
     this.video.src = this.url;
@@ -25,7 +25,7 @@ export class LocalPlayer {
 
     await new Promise((resolve, reject) => {
       const ok = () => { cleanup(); resolve(); };
-      const bad = () => { cleanup(); reject(new Error('this file cannot be played by your browser')); };
+      const bad = () => { cleanup(); reject(new Error('cannot play this file')); };
       const cleanup = () => {
         this.video.removeEventListener('loadedmetadata', ok);
         this.video.removeEventListener('error', bad);
@@ -46,7 +46,7 @@ export class LocalPlayer {
       this.video.captureStream?.bind(this.video) ||
       this.video.mozCaptureStream?.bind(this.video);
     if (!capture) {
-      throw new Error('this browser cannot capture video. try chrome or firefox.');
+      throw new Error('browser cannot capture video');
     }
     this.stream = capture();
     return this.stream;
@@ -63,17 +63,22 @@ export class LocalPlayer {
     };
   }
 
+  /** Stop capturing without touching the element's current source. */
+  stopCapture() {
+    if (!this.stream) return;
+    const stream = this.stream;
+    this.stream = null;
+    for (const track of stream.getTracks()) {
+      try { track.stop(); } catch { /* already ended */ }
+    }
+  }
+
   release() {
     // A media element that is being captured stays bound to its old source;
     // stop the tracks or the next file will never reach loadedmetadata.
-    if (this.stream) {
-      for (const track of this.stream.getTracks()) {
-        try { track.stop(); } catch { /* already ended */ }
-      }
-    }
+    this.stopCapture();
     if (this.url) URL.revokeObjectURL(this.url);
     this.url = null;
-    this.stream = null;
     this.meta = null;
     this.video.removeAttribute('src');
     this.video.removeAttribute('data-live');

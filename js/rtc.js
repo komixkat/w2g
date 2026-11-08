@@ -3,6 +3,7 @@
 import { pack, unpack, gatherComplete } from './signaling.js';
 
 const ICE_CONFIG = {
+  iceCandidatePoolSize: 2,
   iceServers: [
     { urls: ['stun:stun.l.google.com:19302', 'stun:stun1.l.google.com:19302'] },
   ],
@@ -11,24 +12,18 @@ const ICE_CONFIG = {
 export class Link {
   /**
    * handlers: onState(state), onStream(stream), onData(msg),
-   *           onOpen(), onClose(), onStats({ kbps, rtt, dir })
+   *           onOpen(), onClose()
    */
   constructor(handlers = {}) {
     this.h = handlers;
     this.pc = new RTCPeerConnection(ICE_CONFIG);
     this.dc = null;
     this.closed = false;
-    this.timer = 0;
-    this.prev = { out: { bytes: 0, ts: 0 }, in: { bytes: 0, ts: 0 } };
 
     this.pc.addEventListener('connectionstatechange', () => {
       const s = this.pc.connectionState;
       this.h.onState?.(s);
-      if (s === 'connected') {
-        this._capBitrate();
-        this._startStats();
-      }
-      if (s === 'failed' || s === 'closed' || s === 'disconnected') this._stopStats();
+      if (s === 'connected') this._capBitrate();
     });
 
     this.pc.addEventListener('track', ev => {
@@ -37,6 +32,9 @@ export class Link {
       if (!this.remote.getTracks().some(t => t.id === ev.track.id)) {
         this.remote.addTrack(ev.track);
       }
+      // Keep the jitter buffer short so the viewer stays close to the host.
+      try { ev.receiver.playoutDelayHint = 0; } catch { /* not supported */ }
+      try { ev.receiver.jitterBufferTarget = 0; } catch { /* not supported */ }
       this.h.onStream?.(this.remote);
     });
 
@@ -56,22 +54,23 @@ export class Link {
       this.pc.addTrack(track, stream);
     }
 
-    // Offer only the codecs that every supported browser shares. Chromium
-    // otherwise lists a dozen H.264 profile variants, which triples the SDP
-    // and pushes the invite code past chat-app message limits.
-    this._limitVideoCodecs(['video/VP8', 'video/H264', 'video/rtx']);
+    // One audio codec and one video codec keeps the SDP small. VP8 + Opus
+    // work in every browser this app supports, and dropping the H.264
+    // profile variants cuts the invite code roughly in half.
+    this._limitCodecs('audio', ['audio/opus']);
+    this._limitCodecs('video', ['video/VP8', 'video/rtx']);
 
     await this.pc.setLocalDescription(await this.pc.createOffer());
     await gatherComplete(this.pc);
     return pack(this.pc.localDescription);
   }
 
-  _limitVideoCodecs(mimes) {
+  _limitCodecs(kind, mimes) {
     if (!RTCRtpSender.getCapabilities) return;
-    const tx = this.pc.getTransceivers().find(t => t.sender?.track?.kind === 'video');
+    const tx = this.pc.getTransceivers().find(t => t.sender?.track?.kind === kind);
     if (!tx || !tx.setCodecPreferences) return;
     try {
-      const caps = RTCRtpSender.getCapabilities('video');
+      const caps = RTCRtpSender.getCapabilities(kind);
       const prefs = caps.codecs.filter(c => mimes.includes(c.mimeType));
       if (prefs.length) tx.setCodecPreferences(prefs);
     } catch { /* older browser; send the full codec list */ }
@@ -80,7 +79,7 @@ export class Link {
   /** Apply the guest's reply code and finish negotiation. */
   async hostFinish(code) {
     const desc = await unpack(code);
-    if (desc.type !== 'answer') throw new Error('that is an invite code, not a reply code');
+    if (desc.type !== 'answer') throw new Error('need a reply code');
     await this.pc.setRemoteDescription(desc);
   }
 
@@ -89,7 +88,7 @@ export class Link {
   /** Apply the host's invite and return the reply code. */
   async guestAnswer(code) {
     const desc = await unpack(code);
-    if (desc.type !== 'offer') throw new Error('that is a reply code, not an invite code');
+    if (desc.type !== 'offer') throw new Error('need an invite code');
     await this.pc.setRemoteDescription(desc);
     await this.pc.setLocalDescription(await this.pc.createAnswer());
     await gatherComplete(this.pc);
@@ -97,6 +96,19 @@ export class Link {
   }
 
   /* ── both ─────────────────────────────────────────────── */
+
+  /** Swap outgoing media without renegotiating. Pass null to detach. */
+  async setStream(stream) {
+    const jobs = [];
+    for (const tx of this.pc.getTransceivers()) {
+      const kind = tx.receiver?.track?.kind || tx.sender?.track?.kind;
+      if (!kind) continue;
+      const track = stream ? stream.getTracks().find(t => t.kind === kind) || null : null;
+      if (!track && !tx.sender.track) continue;
+      jobs.push(tx.sender.replaceTrack(track).catch(() => {}));
+    }
+    await Promise.all(jobs);
+  }
 
   send(msg) {
     if (!this.dc || this.dc.readyState !== 'open') return false;
@@ -110,12 +122,11 @@ export class Link {
 
   close() {
     this.closed = true;
-    this._stopStats();
+    // Silence every late event from our own teardown before it can fire and
+    // clobber the UI state that replaces this link.
+    this.h = {};
     try { this.dc?.close(); } catch { /* already gone */ }
     try { this.pc.close(); } catch { /* already gone */ }
-    // Silence late events from our own teardown so they cannot clobber
-    // the UI state that replaces this link.
-    this.h = {};
   }
 
   /* ── internals ────────────────────────────────────────── */
@@ -140,52 +151,5 @@ export class Link {
       params.encodings[0].maxBitrate = max;
       await sender.setParameters(params);
     } catch { /* browser refused; default bitrate is fine */ }
-  }
-
-  _startStats() {
-    this._stopStats();
-    this.timer = setInterval(() => this._sampleStats(), 2000);
-  }
-
-  _stopStats() {
-    if (this.timer) clearInterval(this.timer);
-    this.timer = 0;
-  }
-
-  async _sampleStats() {
-    if (this.closed) return;
-    let report;
-    try { report = await this.pc.getStats(); } catch { return; }
-
-    const now = performance.now();
-    let kbps = 0;
-    let dir = 'out';
-    let rtt = null;
-
-    report.forEach(r => {
-      if (r.type === 'outbound-rtp' && r.kind === 'video') {
-        dir = 'out';
-        kbps = this._rate('out', r.bytesSent, now);
-      } else if (r.type === 'inbound-rtp' && r.kind === 'video' && !kbps) {
-        dir = 'in';
-        kbps = this._rate('in', r.bytesReceived, now);
-      } else if (r.type === 'candidate-pair' && r.state === 'succeeded' && r.currentRoundTripTime != null) {
-        rtt = Math.round(r.currentRoundTripTime * 1000);
-      }
-    });
-
-    this.h.onStats?.({ kbps, rtt, dir });
-  }
-
-  _rate(key, bytes, now) {
-    const prev = this.prev[key];
-    let kbps = 0;
-    if (prev.ts && bytes >= prev.bytes) {
-      const seconds = (now - prev.ts) / 1000;
-      if (seconds > 0.2) kbps = Math.round(((bytes - prev.bytes) * 8) / seconds / 1000);
-    }
-    prev.bytes = bytes;
-    prev.ts = now;
-    return kbps;
   }
 }

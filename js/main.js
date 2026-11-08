@@ -5,33 +5,34 @@ import { LocalPlayer } from './player.js';
 const $ = id => document.getElementById(id);
 
 const UI = {
-  statusPill: $('statusPill'), statusText: $('statusText'),
+  statusPill: $('statusPill'), statusText: $('statusText'), btnHome: $('btnHome'),
 
   landing: $('viewLanding'), room: $('viewRoom'),
+  lede: $('lede'), nameInput: $('nameInput'),
   btnHost: $('btnHost'), btnJoin: $('btnJoin'),
 
   video: $('video'), fileInput: $('fileInput'), changeFile: $('changeFile'),
   stageEmpty: $('stageEmpty'), stageRemote: $('stageRemote'),
-  stageRemoteText: $('stageRemoteText'), btnWatch: $('btnWatch'),
+  stageRemoteText: $('stageRemoteText'), stageHint: $('stageHint'),
+  btnWatch: $('btnWatch'),
   stagePaused: $('stagePaused'),
   fileName: $('fileName'), statTime: $('statTime'), statDur: $('statDur'),
-  statNet: $('statNet'), progressFill: $('progressFill'), roomBadge: $('roomBadge'),
+  progressFill: $('progressFill'),
 
-  connectBadge: $('connectBadge'), connectError: $('connectError'),
+  connectError: $('connectError'),
   stepHost: $('stepHost'), stepGuest: $('stepGuest'),
-  inviteOut: $('inviteOut'), inviteMeta: $('inviteMeta'),
-  replyIn: $('replyIn'), btnFinish: $('btnFinish'),
-  btnResetHost: $('btnResetHost'),
+  inviteOut: $('inviteOut'), replyIn: $('replyIn'), btnFinish: $('btnFinish'),
+  btnResetHost: $('btnResetHost'), btnShare: $('btnShare'),
   inviteIn: $('inviteIn'), btnAnswer: $('btnAnswer'), btnResetGuest: $('btnResetGuest'),
   replyWrap: $('replyWrap'), replyOut: $('replyOut'),
-  connectedNote: $('connectedNote'), connectedDetail: $('connectedDetail'),
-  btnResetConnected: $('btnResetConnected'),
+  connectedNote: $('connectedNote'), btnResetConnected: $('btnResetConnected'),
 
-  chatList: $('chatList'), chatEmpty: $('chatEmpty'),
-  chatText: $('chatText'), btnSend: $('btnSend'), peerBadge: $('peerBadge'),
+  chatList: $('chatList'), chatText: $('chatText'), btnSend: $('btnSend'),
 
   toasts: $('toasts'),
 };
+
+let sessionSeq = 0;
 
 const state = {
   role: null,
@@ -39,26 +40,49 @@ const state = {
   connected: false,
   saidHello: false,
   remoteStream: null,
-  peerName: null,
+  peerName: '',
   lastStateAt: 0,
   watchLock: null,
-  name: nickname(),
+  pendingInvite: '',
+  swapping: false,
+  name: savedName(),
 };
 
 const player = new LocalPlayer(UI.video, onLocalState);
-const chat = new Chat({
-  list: UI.chatList,
-  empty: UI.chatEmpty,
-  input: UI.chatText,
-  send: UI.btnSend,
+const chat = new Chat({ list: UI.chatList, input: UI.chatText, send: UI.btnSend });
+
+UI.nameInput.value = state.name;
+
+/* ── landing ──────────────────────────────────────────────── */
+
+UI.btnHost.addEventListener('click', beginHost);
+UI.btnJoin.addEventListener('click', () => beginGuest(state.pendingInvite));
+
+UI.nameInput.addEventListener('input', () => {
+  UI.nameInput.classList.remove('invalid');
+  UI.nameInput.placeholder = 'name';
+  state.name = UI.nameInput.value.trim().slice(0, 24);
 });
 
-/* ── entry ────────────────────────────────────────────────── */
+UI.nameInput.addEventListener('change', () => {
+  state.name = UI.nameInput.value.trim().replace(/\s+/g, ' ').slice(0, 24);
+  persistName(state.name);
+});
 
-UI.btnHost.addEventListener('click', () => {
+UI.nameInput.addEventListener('keydown', ev => {
+  if (ev.key !== 'Enter') return;
+  ev.preventDefault();
+  (state.pendingInvite ? UI.btnJoin : UI.btnHost).click();
+});
+
+function beginHost(restore = false) {
+  if (!requireName()) return;
   state.role = 'host';
+  state.pendingInvite = '';
+  state.peerName = '';
   openRoom();
   chat.clear();
+  saveRoom({ invite: '' });
 
   // Drop anything left over from a guest session.
   UI.video.srcObject = null;
@@ -68,10 +92,7 @@ UI.btnHost.addEventListener('click', () => {
   UI.stepGuest.classList.add('hidden');
   UI.changeFile.classList.remove('hidden');
   UI.video.controls = true;
-  setRoomBadge('waiting');
   setStatus('idle');
-  setConnectBadge('choose a video');
-  chat.system(`you are ${state.name}`);
 
   if (player.url && player.meta) {
     UI.stageEmpty.classList.add('hidden');
@@ -84,13 +105,22 @@ UI.btnHost.addEventListener('click', () => {
 
   UI.stageEmpty.classList.remove('hidden');
   UI.stageRemote.classList.add('hidden');
-  chat.system('choose a video to build an invite code');
-});
+  UI.fileName.textContent = '—';
+  if (restore) showHint('session restored — choose your video again');
+  else UI.stageHint.classList.add('hidden');
+  if (!restore) UI.fileInput.click();
+}
 
-UI.btnJoin.addEventListener('click', () => {
+function beginGuest(invite = '', restore = false) {
+  if (!requireName()) return;
   state.role = 'guest';
+  state.pendingInvite = '';
+  state.peerName = '';
+  const previousInvite = restore ? (savedRoom()?.invite || '') : '';
+  const keptInvite = invite || previousInvite;
   openRoom();
   chat.clear();
+  saveRoom({ invite: keptInvite });
 
   // A guest never plays local media.
   UI.video.srcObject = null;
@@ -101,24 +131,35 @@ UI.btnJoin.addEventListener('click', () => {
   UI.stepHost.classList.add('hidden');
   UI.changeFile.classList.add('hidden');
   UI.stageEmpty.classList.add('hidden');
+  UI.stageHint.classList.add('hidden');
   UI.stageRemote.classList.remove('hidden');
-  UI.stageRemoteText.textContent = 'paste an invite code to begin';
+  UI.stageRemoteText.textContent = 'no stream';
   UI.btnWatch.classList.add('hidden');
   UI.video.controls = false;
-  setConnectBadge('paste a code');
-  setRoomBadge('waiting');
+  UI.fileName.textContent = '—';
   setStatus('idle');
-  chat.system(`you are ${state.name}`);
-  chat.system('ask your friend for an invite code');
-});
 
-document.querySelector('.logo').addEventListener('click', () => {
-  if (state.connected && !confirm('leave the session?')) return;
-  resetSession();
-  UI.room.classList.add('hidden');
-  UI.landing.classList.remove('hidden');
-  setStatus('idle');
-});
+  if (keptInvite) UI.inviteIn.value = keptInvite;
+  if (invite && !restore) answerInvite();
+}
+
+function requireName() {
+  const name = UI.nameInput.value.trim().replace(/\s+/g, ' ').slice(0, 24);
+  if (!name) {
+    UI.nameInput.classList.add('invalid');
+    UI.nameInput.placeholder = 'enter a name';
+    UI.nameInput.focus();
+    return false;
+  }
+  UI.nameInput.classList.remove('invalid');
+  state.name = name;
+  persistName(name);
+  return true;
+}
+
+function persistName(name) {
+  try { localStorage.setItem('w2g:name', name); } catch { /* storage blocked */ }
+}
 
 function openRoom() {
   UI.landing.classList.add('hidden');
@@ -126,26 +167,30 @@ function openRoom() {
   window.scrollTo(0, 0);
 }
 
-/* ── host: pick a file, build a code ──────────────────────── */
+UI.btnHome.addEventListener('click', () => {
+  if (state.connected && !confirm('leave the session?')) return;
+  leaveRoom();
+  UI.room.classList.add('hidden');
+  UI.landing.classList.remove('hidden');
+  setStatus('idle');
+});
+
+/* ── host: pick a file, build an invite ───────────────────── */
 
 UI.fileInput.addEventListener('change', async ev => {
   const file = ev.target.files?.[0];
   ev.target.value = '';
   if (!file || state.role !== 'host') return;
+  clearError();
 
   if (state.connected) {
-    toast('changing the file ends the current session', 'warn');
-    chat.system('loading a new file — the current session ends');
+    await swapHostFile(file);
+    return;
   }
 
   try {
     const meta = await player.load(file);
-    UI.stageEmpty.classList.add('hidden');
-    UI.stageRemote.classList.add('hidden');
-    UI.fileName.textContent = meta.name;
-    UI.statDur.textContent = fmtTime(meta.duration);
-    UI.statTime.textContent = '00:00';
-    UI.progressFill.style.width = '0%';
+    showHostFile(meta.name, meta.duration);
     await startHostSession();
   } catch (err) {
     fail(err.message);
@@ -157,94 +202,177 @@ UI.fileInput.addEventListener('change', async ev => {
   }
 });
 
-UI.changeFile.addEventListener('click', () => {
-  // Once a file has been captured, a media element stays bound to that source:
-  // pointing it at another file can stall before metadata loads. A fresh page
-  // is the reliable reset, and swapping files ends the session anyway.
-  if (!player.url) {
-    UI.fileInput.click();
-    return;
+UI.changeFile.addEventListener('click', () => UI.fileInput.click());
+
+function showHostFile(name, duration) {
+  UI.stageHint.classList.add('hidden');
+  UI.stageEmpty.classList.add('hidden');
+  UI.stageRemote.classList.add('hidden');
+  UI.fileName.textContent = name;
+  UI.statDur.textContent = fmtTime(duration);
+  UI.statTime.textContent = '00:00';
+  setProgress(0);
+}
+
+/** Load a new file and put its tracks on the existing peer connection. */
+async function swapHostFile(file) {
+  if (state.swapping) return;
+  state.swapping = true;
+  const link = state.link;
+  const wasPlaying = !UI.video.paused;
+
+  try {
+    // A captured media element will not accept a new source until its old
+    // capture tracks are stopped. The peer connection itself stays up.
+    player.stopCapture();
+    const meta = await player.load(file);
+    showHostFile(meta.name, meta.duration);
+
+    if (!state.connected || state.link !== link) {
+      await startHostSession();
+      return;
+    }
+
+    const stream = player.capture();
+    await link.setStream(stream);
+
+    if (!state.connected || state.link !== link) {
+      await startHostSession();
+      return;
+    }
+
+    link.send({ t: 'meta', name: meta.name, duration: meta.duration });
+
+    if (wasPlaying) {
+      try { await UI.video.play(); } catch { /* they can press play */ }
+    }
+    link.send({
+      t: 'state',
+      paused: UI.video.paused,
+      time: UI.video.currentTime || 0,
+      duration: meta.duration,
+    });
+    setStatus('connected');
+  } catch (err) {
+    // The peer is still connected; let the host try another file.
+    if (state.connected) {
+      toast(err.message, 'err');
+      if (!player.meta) UI.stageEmpty.classList.remove('hidden');
+    } else {
+      fail(err.message);
+    }
+  } finally {
+    state.swapping = false;
   }
-  if (state.connected && !confirm('changing the file ends the current session. continue?')) return;
-  location.hash = '#host';
-  location.reload();
-});
+}
 
 async function startHostSession() {
   teardownLink();
+  const seq = sessionSeq;
   clearError();
   resetCodes();
   setStatus('connecting');
-  setConnectBadge('building code');
-  setRoomBadge('waiting', 'warn');
+  UI.inviteOut.placeholder = 'building…';
 
   try {
     const stream = player.capture();
     const link = new Link(handlers());
     state.link = link;
     const code = await link.hostOffer(stream);
-    UI.inviteOut.value = code;
-    UI.inviteMeta.textContent = code.length > 1900
-      ? `${code.length} characters · over some chat limits — send it in two parts`
-      : `${code.length} characters`;
+    if (seq !== sessionSeq) return;
+    UI.inviteOut.value = inviteLink(code);
+    UI.inviteOut.placeholder = 'choose a video first';
     UI.replyIn.value = '';
-    setConnectBadge('awaiting reply');
-    chat.system('invite code ready — copy it to your friend');
+    setStatus('waiting');
   } catch (err) {
+    if (seq !== sessionSeq) return;
     state.link?.close();
     state.link = null;
+    UI.inviteOut.placeholder = 'choose a video first';
     fail(err.message);
   }
+}
+
+function inviteLink(code) {
+  return `${location.origin}${location.pathname}#i.${code}`;
 }
 
 UI.btnFinish.addEventListener('click', async () => {
   if (UI.btnFinish.disabled) return;
   clearError();
   const code = UI.replyIn.value.trim();
-  if (!code) return showError('paste the reply code first');
-  if (!state.link) return showError('choose a video first — that builds the invite');
-  setConnectBadge('connecting');
+  if (!code) return showError('paste the reply first');
+  if (!state.link) return showError('choose a video first');
   setStatus('connecting');
   UI.btnFinish.disabled = true;
+  UI.btnFinish.textContent = 'connecting…';
   try {
     await state.link.hostFinish(code);
-    chat.system('reply accepted — connecting…');
   } catch (err) {
     fail(err.message);
   } finally {
     UI.btnFinish.disabled = false;
+    UI.btnFinish.textContent = 'connect';
   }
 });
 
-/* ── guest: answer a code ─────────────────────────────────── */
+/* ── guest: answer an invite ──────────────────────────────── */
 
-UI.btnAnswer.addEventListener('click', async () => {
+UI.btnAnswer.addEventListener('click', answerInvite);
+
+UI.replyIn.addEventListener('keydown', ev => {
+  if (ev.key === 'Enter' && !ev.shiftKey) {
+    ev.preventDefault();
+    UI.btnFinish.click();
+  }
+});
+
+UI.inviteIn.addEventListener('keydown', ev => {
+  if (ev.key === 'Enter' && !ev.shiftKey) {
+    ev.preventDefault();
+    UI.btnAnswer.click();
+  }
+});
+
+// A read-only code is meant to be selected as a whole, not edited.
+for (const field of [UI.inviteOut, UI.replyOut]) {
+  field.addEventListener('focus', () => field.select());
+  field.addEventListener('click', () => field.select());
+}
+
+async function answerInvite() {
   if (UI.btnAnswer.disabled) return;
   clearError();
   const code = UI.inviteIn.value.trim();
-  if (!code) return showError('paste the invite code first');
+  if (!code) return showError('paste the invite first');
+  saveRoom({ invite: code });
 
   teardownLink();
+  const seq = sessionSeq;
   setStatus('connecting');
-  setConnectBadge('building reply');
   UI.btnAnswer.disabled = true;
+  UI.btnAnswer.textContent = 'building…';
 
   try {
     const link = new Link(handlers());
     state.link = link;
     const reply = await link.guestAnswer(code);
+    if (seq !== sessionSeq) return;
     UI.replyOut.value = reply;
     UI.replyWrap.classList.remove('hidden');
-    UI.stageRemoteText.textContent = 'waiting for the host to connect';
-    setConnectBadge('awaiting host');
-    chat.system('reply code ready — send it back');
+    UI.stageRemoteText.textContent = 'waiting for host';
+    setStatus('waiting');
   } catch (err) {
+    if (seq !== sessionSeq) return;
     teardownLink();
     fail(err.message);
   } finally {
-    UI.btnAnswer.disabled = false;
+    if (seq === sessionSeq) {
+      UI.btnAnswer.disabled = false;
+      UI.btnAnswer.textContent = 'generate reply';
+    }
   }
-});
+}
 
 /* ── one link, many events ────────────────────────────────── */
 
@@ -255,22 +383,19 @@ function handlers() {
     onClose: onChannelClose,
     onData: onChannelData,
     onStream: onRemoteStream,
-    onStats: onStats,
   };
 }
 
 function onPeerState(s) {
   if (s === 'connected') {
-    setStatus('connected', 'connected');
+    setStatus('connected');
   } else if (s === 'connecting' || s === 'new') {
     setStatus('connecting');
   } else if (s === 'disconnected') {
     setStatus('connecting');
-    toast('connection dropped — trying to recover', 'warn');
   } else if (s === 'failed') {
     setStatus('error');
-    setConnectBadge('failed');
-    toast('connection failed. reset and exchange codes again.', 'err');
+    showError('connection failed');
   } else if (s === 'closed') {
     setStatus('idle');
   }
@@ -281,19 +406,12 @@ function onChannelOpen() {
   state.saidHello = false;
 
   chat.setEnabled(true);
-  UI.peerBadge.textContent = '2 here';
   UI.stepHost.classList.add('hidden');
   UI.stepGuest.classList.add('hidden');
   UI.connectedNote.classList.remove('hidden');
-  UI.connectedDetail.textContent = state.role === 'host'
-    ? 'your friend is connected'
-    : 'connected to your friend';
-  setConnectBadge('connected', 'live');
-  setRoomBadge(state.role === 'host' ? 'live' : 'streaming', 'live');
-  setStatus('connected', 'connected');
+  setStatus('connected');
   clearError();
 
-  chat.system('connected');
   sendHello();
 
   if (state.role === 'host') {
@@ -312,48 +430,79 @@ function onChannelOpen() {
 }
 
 function onChannelClose() {
+  teardownLink();
   state.connected = false;
   state.saidHello = false;
+  state.peerName = '';
   chat.setEnabled(false);
-  UI.peerBadge.textContent = 'solo';
+  chat.clear();
   UI.connectedNote.classList.add('hidden');
-  if (state.role === 'host') UI.stepHost.classList.remove('hidden');
-  if (state.role === 'guest') UI.stepGuest.classList.remove('hidden');
-  setConnectBadge('exchange new codes');
-  setRoomBadge('waiting');
-  setStatus('idle');
-  chat.system('disconnected');
   hidePaused();
+
+  // The old codes are dead. Build a fresh invite on the host, and let the
+  // guest start over with a new one.
+  if (state.role === 'host' && player.url && !state.swapping) {
+    UI.stepHost.classList.remove('hidden');
+    UI.stepGuest.classList.add('hidden');
+    startHostSession();
+    return;
+  }
+
+  resetCodes();
+  if (state.role === 'guest') {
+    state.remoteStream = null;
+    UI.video.srcObject = null;
+    delete UI.video.dataset.live;
+    UI.stepGuest.classList.remove('hidden');
+    UI.stepHost.classList.add('hidden');
+    UI.stageRemote.classList.remove('hidden');
+    UI.stageRemoteText.textContent = 'no stream';
+    UI.btnWatch.classList.add('hidden');
+  } else if (state.role === 'host') {
+    UI.stepHost.classList.remove('hidden');
+    UI.stepGuest.classList.add('hidden');
+  }
+  setStatus('idle');
 }
 
 function onChannelData(msg) {
   if (!msg || typeof msg !== 'object') return;
 
   switch (msg.t) {
-    case 'hello': {
-      const name = clean(msg.name);
-      if (!name) return;
-      state.peerName = name;
-      chat.system(`${name} joined`);
+    case 'hello':
+      state.peerName = clean(msg.name, 24);
       if (!state.saidHello) sendHello();
       break;
-    }
     case 'chat': {
       const text = clean(msg.text, 2000);
       if (!text) return;
-      chat.add({ name: clean(msg.name) || state.peerName || 'peer', text, ts: msg.ts });
+      chat.add({
+        name: clean(msg.name, 24) || state.peerName || 'peer',
+        text,
+        ts: msg.ts,
+      });
       break;
     }
     case 'state':
       renderRemoteState(msg);
       break;
-    case 'meta': {
-      const name = clean(msg.name, 200);
-      if (name) UI.fileName.textContent = name;
+    case 'meta':
+      UI.fileName.textContent = clean(msg.name, 200) || '—';
       UI.statDur.textContent = fmtTime(Number(msg.duration));
       break;
-    }
   }
+}
+
+function submitCode(field) {
+  if (field.value.trim().length < 20) return;
+  setTimeout(() => {
+    if (field === UI.inviteIn) answerInvite();
+    else if (field === UI.replyIn) UI.btnFinish.click();
+  }, 0);
+}
+
+for (const field of [UI.inviteIn, UI.replyIn]) {
+  field.addEventListener('paste', () => setTimeout(() => submitCode(field), 0));
 }
 
 function sendHello() {
@@ -365,9 +514,8 @@ function onRemoteStream(stream) {
   if (state.role !== 'guest') return;
   state.remoteStream = stream;
   UI.stageRemote.classList.remove('hidden');
-  UI.stageRemoteText.textContent = 'stream is live';
+  UI.stageRemoteText.textContent = 'stream ready';
   UI.btnWatch.classList.remove('hidden');
-  chat.system('stream ready — press watch');
 }
 
 UI.btnWatch.addEventListener('click', async () => {
@@ -382,7 +530,7 @@ UI.btnWatch.addEventListener('click', async () => {
   } catch {
     // Autoplay was refused: leave the controls on so they can start it.
     UI.video.controls = true;
-    toast('press play on the video to start', 'warn');
+    toast('press play to start', 'warn');
   }
 });
 
@@ -418,34 +566,28 @@ function renderRemoteState(msg) {
   const time = Number(msg.time) || 0;
   const duration = Number(msg.duration) || 0;
   renderPosition(time, duration);
-  if (msg.paused && state.connected) {
-    UI.stagePaused.classList.remove('hidden');
-  } else {
-    UI.stagePaused.classList.add('hidden');
-  }
+  UI.stagePaused.classList.toggle('hidden', !msg.paused || !state.connected);
 }
 
 function renderPosition(time, duration) {
   UI.statTime.textContent = fmtTime(time);
   UI.statDur.textContent = fmtTime(duration);
   const pct = duration > 0 ? Math.min(100, (time / duration) * 100) : 0;
-  UI.progressFill.style.width = pct.toFixed(2) + '%';
+  setProgress(pct);
+}
+
+function setProgress(percent) {
+  const scale = Math.max(0, Math.min(1, percent / 100));
+  UI.progressFill.style.transform = `scaleX(${scale.toFixed(4)})`;
 }
 
 function hidePaused() {
   UI.stagePaused.classList.add('hidden');
 }
 
-/* ── stats ────────────────────────────────────────────────── */
-
-function onStats({ kbps, rtt, dir }) {
-  if (!state.connected) {
-    UI.statNet.textContent = '—';
-    return;
-  }
-  const arrow = dir === 'out' ? '\u2191' : '\u2193';
-  const rate = kbps >= 1000 ? (kbps / 1000).toFixed(1) + ' mbps' : kbps + ' kbps';
-  UI.statNet.textContent = `${arrow} ${rate}${rtt != null ? ` \u00b7 ${rtt} ms` : ''}`;
+function showHint(text) {
+  UI.stageHint.textContent = text;
+  UI.stageHint.classList.remove('hidden');
 }
 
 /* ── chat ─────────────────────────────────────────────────── */
@@ -454,10 +596,7 @@ function sendChat() {
   const text = UI.chatText.value.trim();
   if (!text || !state.connected) return;
   const sent = state.link?.send({ t: 'chat', name: state.name, text, ts: Date.now() });
-  if (!sent) {
-    toast('not connected — message not sent', 'err');
-    return;
-  }
+  if (!sent) return;
   chat.add({ name: state.name, text, ts: Date.now(), self: true });
   UI.chatText.value = '';
   UI.chatText.focus();
@@ -471,11 +610,44 @@ UI.chatText.addEventListener('keydown', ev => {
   }
 });
 
+UI.chatText.addEventListener('focus', () => {
+  if (window.innerWidth > 860) return;
+  setTimeout(() => UI.chatText.scrollIntoView({ block: 'nearest' }), 120);
+});
+
 /* ── reset / teardown ─────────────────────────────────────── */
 
-UI.btnResetHost.addEventListener('click', () => resetSession());
-UI.btnResetGuest.addEventListener('click', () => resetSession());
-UI.btnResetConnected.addEventListener('click', () => resetSession());
+UI.btnResetHost.addEventListener('click', resetSession);
+UI.btnResetGuest.addEventListener('click', resetSession);
+UI.btnResetConnected.addEventListener('click', resetSession);
+
+function leaveRoom() {
+  teardownLink();
+  clearError();
+  resetCodes();
+  hidePaused();
+  clearRoom();
+  state.remoteStream = null;
+  state.role = null;
+  state.peerName = '';
+
+  player.release();
+  UI.video.srcObject = null;
+  delete UI.video.dataset.live;
+
+  chat.setEnabled(false);
+  chat.clear();
+  UI.connectedNote.classList.add('hidden');
+  UI.fileName.textContent = '—';
+  UI.statDur.textContent = '00:00';
+  UI.statTime.textContent = '00:00';
+  setProgress(0);
+
+  UI.lede.textContent = 'watch the same video file together, peer-to-peer.';
+  UI.btnHost.classList.remove('hidden');
+  UI.btnJoin.textContent = 'join a session';
+  state.pendingInvite = '';
+}
 
 function resetSession() {
   const hadFile = !!player.url;
@@ -490,22 +662,19 @@ function resetSession() {
 
   chat.setEnabled(false);
   chat.clear();
-  UI.peerBadge.textContent = 'solo';
   UI.connectedNote.classList.add('hidden');
-  UI.statNet.textContent = '—';
   UI.statTime.textContent = '00:00';
-  UI.progressFill.style.width = '0%';
+  setProgress(0);
 
   if (state.role === 'guest') {
     UI.stageRemote.classList.remove('hidden');
-    UI.stageRemoteText.textContent = 'paste an invite code to begin';
+    UI.stageRemoteText.textContent = 'no stream';
     UI.btnWatch.classList.add('hidden');
   }
 
   if (state.role === 'host' && hadFile) {
     UI.stepHost.classList.remove('hidden');
     UI.stepGuest.classList.add('hidden');
-    chat.system('session reset — building a new invite');
     startHostSession();
     return;
   }
@@ -513,20 +682,17 @@ function resetSession() {
   if (state.role === 'host') {
     UI.stepHost.classList.remove('hidden');
     UI.stepGuest.classList.add('hidden');
-    chat.system('session reset');
-    setConnectBadge('choose a video');
   } else if (state.role === 'guest') {
     UI.stepGuest.classList.remove('hidden');
     UI.stepHost.classList.add('hidden');
-    chat.system('session reset');
-    setConnectBadge('paste a code');
   }
 
-  setRoomBadge('waiting');
   setStatus('idle');
 }
 
 function teardownLink() {
+  sessionSeq += 1;
+  resetBusy();
   if (state.link) {
     try { state.link.close(); } catch { /* already gone */ }
   }
@@ -539,9 +705,16 @@ function teardownLink() {
   }
 }
 
+function resetBusy() {
+  UI.btnAnswer.disabled = false;
+  UI.btnAnswer.textContent = 'generate reply';
+  UI.btnFinish.disabled = false;
+  UI.btnFinish.textContent = 'connect';
+}
+
 function resetCodes() {
   UI.inviteOut.value = '';
-  UI.inviteMeta.textContent = '';
+  UI.inviteOut.placeholder = 'choose a video first';
   UI.replyIn.value = '';
   UI.inviteIn.value = '';
   UI.replyOut.value = '';
@@ -564,25 +737,12 @@ function fail(message) {
   const text = String(message || 'something went wrong');
   showError(text);
   setStatus('error');
-  setConnectBadge('failed');
   toast(text, 'err');
 }
 
-function setStatus(text, kind = 'idle') {
-  UI.statusText.textContent = text;
-  UI.statusPill.dataset.state = kind;
-}
-
-function setConnectBadge(text, kind) {
-  UI.connectBadge.textContent = text;
-  if (kind) UI.connectBadge.dataset.state = kind;
-  else UI.connectBadge.removeAttribute('data-state');
-}
-
-function setRoomBadge(text, kind) {
-  UI.roomBadge.textContent = text;
-  if (kind) UI.roomBadge.dataset.state = kind;
-  else UI.roomBadge.removeAttribute('data-state');
+function setStatus(text) {
+  UI.statusText.textContent = text === 'idle' ? 'ready' : text;
+  UI.statusPill.dataset.state = text;
 }
 
 function toast(message, kind = '') {
@@ -590,7 +750,7 @@ function toast(message, kind = '') {
   el.className = 'toast' + (kind ? ' ' + kind : '');
   el.textContent = message;
   UI.toasts.append(el);
-  setTimeout(() => el.remove(), 6000);
+  setTimeout(() => el.remove(), 5000);
 }
 
 function fmtTime(seconds) {
@@ -609,38 +769,65 @@ function clean(value, max = 40) {
   return value.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, max);
 }
 
-function nickname() {
-  const words = {
-    a: ['silent', 'hollow', 'cold', 'pale', 'lost', 'quiet', 'empty', 'sharp', 'bitter', 'slow'],
-    n: ['crow', 'moth', 'wolf', 'tide', 'ash', 'iron', 'raven', 'ghost', 'flame', 'dust'],
-  };
-  try {
-    const saved = localStorage.getItem('w2g:name');
-    if (saved) return saved;
-  } catch { /* storage blocked */ }
-  const name = pick(words.a) + ' ' + pick(words.n);
-  try { localStorage.setItem('w2g:name', name); } catch { /* storage blocked */ }
-  return name;
+function savedName() {
+  try { return (localStorage.getItem('w2g:name') || '').trim().slice(0, 24); }
+  catch { return ''; }
 }
 
-function pick(list) {
-  return list[Math.floor(Math.random() * list.length)];
+/* ── room persists until the user explicitly leaves ───────── */
+
+const ROOM_KEY = 'w2g:room';
+
+function savedRoom() {
+  try {
+    const room = JSON.parse(sessionStorage.getItem(ROOM_KEY) || 'null');
+    return room && (room.role === 'host' || room.role === 'guest') ? room : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveRoom(patch = {}) {
+  try {
+    const room = { ...(savedRoom() || {}), ...patch, role: state.role, name: state.name };
+    sessionStorage.setItem(ROOM_KEY, JSON.stringify(room));
+  } catch { /* storage blocked */ }
+}
+
+function clearRoom() {
+  try { sessionStorage.removeItem(ROOM_KEY); } catch { /* storage blocked */ }
 }
 
 /* ── clipboard ────────────────────────────────────────────── */
+
+document.addEventListener('click', async ev => {
+  const chip = ev.target.closest('[data-paste]');
+  if (!chip) return;
+  const target = document.getElementById(chip.dataset.paste);
+  try {
+    const text = (await navigator.clipboard.readText()).trim();
+    if (!text) return;
+    target.value = text;
+    target.dispatchEvent(new Event('input', { bubbles: true }));
+    target.focus();
+    submitCode(target);
+    const label = chip.textContent;
+    chip.textContent = 'pasted';
+    setTimeout(() => { chip.textContent = label; }, 1000);
+  } catch {
+    toast('paste failed', 'err');
+  }
+});
 
 document.addEventListener('click', async ev => {
   const chip = ev.target.closest('[data-copy]');
   if (!chip) return;
   const target = document.getElementById(chip.dataset.copy);
   const text = (target?.value ?? target?.textContent ?? '').trim();
-  if (!text) {
-    toast('nothing to copy yet', 'warn');
-    return;
-  }
+  if (!text) return;
   const ok = await copyText(text);
   if (!ok) {
-    toast('copy failed — select the code and copy it manually', 'err');
+    toast('copy failed', 'err');
     return;
   }
   const label = chip.textContent;
@@ -650,6 +837,21 @@ document.addEventListener('click', async ev => {
     chip.classList.remove('ok');
     chip.textContent = label;
   }, 1400);
+});
+
+if (navigator.share) UI.btnShare.classList.remove('hidden');
+
+UI.btnShare.addEventListener('click', async () => {
+  const url = UI.inviteOut.value.trim();
+  if (!url) return toast('choose a video first', 'warn');
+  try {
+    await navigator.share({ title: 'w2g — watch together', text: 'watch together', url });
+  } catch (err) {
+    if (err?.name === 'AbortError') return;
+    // Some desktops expose share but cannot hand off a custom URL.
+    if (await copyText(url)) toast('invite copied');
+    else toast('could not share', 'err');
+  }
 });
 
 async function copyText(text) {
@@ -684,24 +886,54 @@ async function grabWakeLock() {
 }
 
 document.addEventListener('visibilitychange', () => {
-  if (state.role !== 'host' || !state.connected) return;
-  if (document.visibilityState === 'visible') {
+  if (state.role === 'host' && state.connected && document.visibilityState === 'visible') {
     grabWakeLock();
-  } else {
-    toast('tab hidden — your stream may stall', 'warn');
   }
 });
 
-window.addEventListener('beforeunload', ev => {
-  if (state.connected && state.role === 'host') {
-    ev.preventDefault();
-    ev.returnValue = '';
-  }
-});
+/* ── startup: invite links and room restore ───────────────── */
 
-/* deep links: /#host and /#join */
-if (location.hash === '#host') UI.btnHost.click();
-else if (location.hash === '#join') UI.btnJoin.click();
+function inviteFromHash() {
+  const match = location.hash.match(/^#i\.([A-Za-z0-9_.-]+)$/);
+  if (!match) return '';
+  history.replaceState(null, '', location.pathname + location.search);
+  return match[1];
+}
+
+function useInvite(code) {
+  clearRoom();
+  state.pendingInvite = code;
+  UI.lede.textContent = 'you have been invited to watch together.';
+  UI.btnHost.classList.add('hidden');
+  UI.btnJoin.textContent = 'join session';
+  if (state.name) beginGuest(code);
+}
+
+const invited = inviteFromHash();
+if (invited) {
+  useInvite(invited);
+} else {
+  const room = savedRoom();
+  const name = room?.name || state.name;
+  if (room && name) {
+    UI.nameInput.value = name;
+    state.name = name;
+    if (room.role === 'host') {
+      beginHost(true);
+      toast('room restored — choose your video again', 'warn');
+    } else {
+      beginGuest('', true);
+      toast('room restored — reconnect to watch', 'warn');
+    }
+  } else if (room) {
+    clearRoom();
+  }
+}
+
+window.addEventListener('hashchange', () => {
+  const code = inviteFromHash();
+  if (code && UI.room.classList.contains('hidden')) useInvite(code);
+});
 
 /* debug handle, handy from the console */
 window.__w2g = { state, player, chat };

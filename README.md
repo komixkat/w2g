@@ -1,64 +1,25 @@
-# w2g_
+# w2g
 
-Watch the same local video file with one other person, at the same time.
+Watch a local video together, peer-to-peer. No accounts, no uploads, no server.
 
-The site is static. There is no server, no account, and no upload: you pick a
-video from your disk, and it is streamed straight to your friend's browser over
-WebRTC. The two of you exchange connection codes by hand (Discord, Signal,
-wherever), which is what replaces the signalling server.
+## use
 
-## how it works
+1. Enter a name and start a session. Pick a video.
+2. Send the invite link. Your friend opens it, enters a name, and sends back the reply code.
+3. Paste the reply and connect.
 
-1. **Start a session**, pick a video file. Your browser builds an *invite code*
-   (a deflated SDP offer with ICE candidates).
-2. Send that code to your friend. They open the site, **Join a session**, paste
-   it, and get a *reply code* back.
-3. Paste the reply code into your side and press **connect**.
-4. The video streams peer-to-peer. Chat travels over a WebRTC data channel.
-
-Because both codes are generated locally, nothing about the session ever
-touches a third party except STUN, which is used only to discover a network
-path between the two browsers.
+Only the host controls playback. The viewer follows the host's position and pause state.
 
 ## notes
 
-- **Your upload speed is the ceiling.** Video is re-encoded for the peer, capped
-  at 12 Mbps. 1080p usually looks fine; 4K is still a stretch.
-- **Only the host controls playback.** Your friend watches the live stream, so
-  pausing, seeking and volume are yours. They see your position and when you pause.
-- **Keep the tab open and your machine awake.** Screen Wake Lock is requested
-  while connected, but a closed tab ends the session.
-- **Strict NATs can block the connection.** If the status never reaches
-  *connected*, the two networks need a TURN relay; add one to `ICE_CONFIG` in
-  `js/rtc.js`.
-- **Chrome / Firefox** are the supported browsers (`captureStream` is the weak
-  spot on Safari).
+- Chrome or Firefox. Video is capped at 12 Mbps; your upload speed is the real limit.
+- Strict NAT or CGNAT may need a TURN relay. Add one to `ICE_CONFIG` in `js/rtc.js`.
+- Keep the host tab open and the machine awake.
 
-## files
-
-```
-index.html            markup for the landing page and the room
-styles.css            flat dark theme: 28px grid, hairline borders, one accent
-js/main.js            UI state machine, wiring, chat, wake lock
-js/signaling.js       SDP <-> pasteable code (deflate + base64url)
-js/rtc.js             RTCPeerConnection, data channel, bitrate cap, stats
-js/player.js          local file -> <video> -> MediaStream
-js/chat.js            chat rendering
-oneko.js              the cat (MIT, adryd325/oneko.js)
-fonts/Monocraft-Bold.otf   display font (OFL, IdreesInc/Monocraft)
-```
-
-No build step. To preview locally:
+## local
 
 ```sh
 python3 -m http.server 8000
-# http://localhost:8000
 ```
 
-WebRTC needs a secure context; `localhost` counts. For a real test with two
-people, push and use the Pages URL.
-
-## deploy
-
-Pushing to `main` triggers `.github/workflows/deploy.yml`, which publishes the
-repository root to GitHub Pages.
+Pushing to `main` deploys the repository root to GitHub Pages.

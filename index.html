@@ -2,41 +2,37 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>w2g_ · watch together</title>
-<meta name="description" content="Watch the same video file, at the same time. Peer-to-peer, no server.">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>w2g — watch together</title>
+<meta name="description" content="Watch the same video file together, peer-to-peer.">
 <meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#050508">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23050508'/%3E%3Ctext x='8' y='12' font-family='monospace' font-size='11' font-weight='bold' fill='%2300ff41' text-anchor='middle'%3Ew%3C/text%3E%3C/svg%3E">
+<link rel="preload" as="font" type="font/otf" href="./fonts/Monocraft-Bold.otf" crossorigin>
 <link rel="stylesheet" href="./styles.css">
 </head>
 <body>
 
-<div class="titlebar">
-  <div class="logo"><span class="word">w2g</span><span class="caret">_</span></div>
-  <div class="titlebar-right">
-    <span class="pill" id="statusPill" data-state="idle"><i class="dot"></i><span id="statusText">idle</span></span>
-    <a class="chip" href="https://github.com/komixkat/w2g" target="_blank" rel="noopener">github &#8599;</a>
-  </div>
-</div>
+<header class="titlebar">
+  <button class="logo" id="btnHome" type="button" aria-label="home">w2g</button>
+  <span class="pill" id="statusPill" data-state="idle" role="status" aria-live="polite"><i class="dot"></i><span id="statusText">ready</span></span>
+</header>
 
 <main>
 
   <section class="view center" id="viewLanding">
     <div class="landing">
-      <h1 class="display"><span class="word">w2g</span><span class="caret">_</span></h1>
-      <p class="lede">watch the same file, at the same time.</p>
+      <h1 class="display">w2g</h1>
+      <p class="lede" id="lede">watch the same video file together, peer-to-peer.</p>
+      <div class="field">
+        <label class="lbl" for="nameInput">your name</label>
+        <input type="text" id="nameInput" placeholder="name" maxlength="24" autocomplete="nickname" autocapitalize="words">
+      </div>
       <div class="landing-actions">
         <button class="btn btn-green" id="btnHost">start a session</button>
         <button class="btn" id="btnJoin">join a session</button>
       </div>
-      <hr>
-      <ul class="facts">
-        <li><span class="k">source</span><span>a file from your disk, streamed peer-to-peer</span></li>
-        <li><span class="k">server</span><span>none. two codes, exchanged by hand</span></li>
-        <li><span class="k">seats</span><span>two</span></li>
-      </ul>
     </div>
-    <p class="footnote">no accounts &middot; no uploads &middot; chrome or firefox</p>
   </section>
 
   <section class="view hidden" id="viewRoom">
@@ -44,34 +40,27 @@
 
       <div class="col-left">
         <div class="panel stage-panel">
-          <div class="panel-head">
-            <span class="panel-title">now playing</span>
-            <span class="head-right">
-              <button type="button" class="chip" id="changeFile">change</button>
-              <span class="panel-badge" id="roomBadge" data-state="idle">waiting</span>
-            </span>
-          </div>
           <div class="stage">
             <video id="video" playsinline preload="metadata"></video>
 
             <div class="stage-empty" id="stageEmpty">
-              <p>no file loaded</p>
+              <p class="hidden" id="stageHint"></p>
               <label class="btn btn-green" for="fileInput">choose video</label>
               <input type="file" id="fileInput" accept="video/*" hidden>
             </div>
 
             <div class="stage-empty hidden" id="stageRemote">
-              <p id="stageRemoteText">waiting for the stream</p>
+              <p id="stageRemoteText">no stream</p>
               <button class="btn btn-green hidden" id="btnWatch">watch</button>
             </div>
 
-            <div class="stage-flag hidden" id="stagePaused">host paused</div>
+            <div class="stage-flag hidden" id="stagePaused">paused</div>
           </div>
           <div class="transport">
             <span class="t-file" id="fileName">&mdash;</span>
             <span class="transport-right">
               <span class="stat"><b id="statTime">00:00</b><span class="dim"> / </span><span id="statDur">00:00</span></span>
-              <span class="stat" id="statNet">&mdash;</span>
+              <button type="button" class="chip" id="changeFile">change</button>
             </span>
           </div>
           <div class="bar"><div class="bar-fill" id="progressFill"></div></div>
@@ -80,22 +69,24 @@
         <div class="panel" id="connectPanel">
           <div class="panel-head">
             <span class="panel-title">connection</span>
-            <span class="panel-badge" id="connectBadge">idle</span>
           </div>
           <div class="panel-body">
 
             <div class="step hidden" id="stepHost">
               <div class="field">
-                <label class="lbl">1 &middot; send this invite code</label>
+                <label class="lbl" for="inviteOut">invite link</label>
                 <div class="code-row">
-                  <textarea id="inviteOut" readonly spellcheck="false" placeholder="choose a video first&hellip;"></textarea>
-                  <span class="chip" data-copy="inviteOut">copy</span>
+                  <textarea id="inviteOut" readonly spellcheck="false" autocapitalize="none" autocorrect="off" placeholder="choose a video first"></textarea>
+                  <button type="button" class="chip hidden" id="btnShare" aria-label="share invite link">share</button>
+                  <button type="button" class="chip" data-copy="inviteOut" aria-label="copy invite link">copy</button>
                 </div>
-                <div class="code-meta" id="inviteMeta"></div>
               </div>
               <div class="field">
-                <label class="lbl">2 &middot; paste their reply</label>
-                <textarea id="replyIn" spellcheck="false" placeholder="reply code&hellip;"></textarea>
+                <label class="lbl" for="replyIn">reply</label>
+                <div class="code-row">
+                  <textarea id="replyIn" spellcheck="false" autocapitalize="none" autocorrect="off" placeholder="paste reply"></textarea>
+                  <button type="button" class="chip" data-paste="replyIn" aria-label="paste reply">paste</button>
+                </div>
               </div>
               <div class="btn-row">
                 <button class="btn btn-green" id="btnFinish">connect</button>
@@ -105,28 +96,32 @@
 
             <div class="step hidden" id="stepGuest">
               <div class="field">
-                <label class="lbl">1 &middot; paste the invite code</label>
-                <textarea id="inviteIn" spellcheck="false" placeholder="invite code&hellip;"></textarea>
+                <label class="lbl" for="inviteIn">invite</label>
+                <div class="code-row">
+                  <textarea id="inviteIn" spellcheck="false" autocapitalize="none" autocorrect="off" placeholder="paste link or code"></textarea>
+                  <button type="button" class="chip" data-paste="inviteIn" aria-label="paste invite">paste</button>
+                </div>
               </div>
               <div class="btn-row">
                 <button class="btn btn-green" id="btnAnswer">generate reply</button>
                 <button class="btn" id="btnResetGuest">reset</button>
               </div>
               <div class="field hidden" id="replyWrap">
-                <label class="lbl">2 &middot; send this back</label>
+                <label class="lbl" for="replyOut">reply</label>
                 <div class="code-row">
-                  <textarea id="replyOut" readonly spellcheck="false"></textarea>
-                  <span class="chip" data-copy="replyOut">copy</span>
+                  <textarea id="replyOut" readonly spellcheck="false" autocapitalize="none" autocorrect="off"></textarea>
+                  <button type="button" class="chip" data-copy="replyOut" aria-label="copy reply code">copy</button>
                 </div>
               </div>
             </div>
 
             <div class="connected-note hidden" id="connectedNote">
-              <span class="ok">&#9679;</span> <span id="connectedDetail">connected</span>
-              <button class="chip" id="btnResetConnected" style="margin-left:0.5rem">end</button>
+              <span class="ok">&#9679;</span>
+              <span>connected</span>
+              <button class="chip" id="btnResetConnected">end</button>
             </div>
 
-            <div class="error hidden" id="connectError"></div>
+            <div class="error hidden" id="connectError" role="alert"></div>
           </div>
         </div>
       </div>
@@ -134,14 +129,11 @@
       <div class="col-right">
         <div class="panel chat-panel">
           <div class="panel-head">
-            <span class="panel-title">chat</span>
-            <span class="panel-badge" id="peerBadge">solo</span>
+            <span class="panel-title">chat<span class="caret">_</span></span>
           </div>
-          <div class="chat-list" id="chatList">
-            <p class="chat-empty" id="chatEmpty">nothing yet. say hi.</p>
-          </div>
+          <div class="chat-list" id="chatList" role="log" aria-label="chat messages"></div>
           <div class="chat-input">
-            <input type="text" id="chatText" placeholder="connect to chat" autocomplete="off" maxlength="2000" disabled>
+            <input type="text" id="chatText" placeholder="message" autocomplete="off" autocapitalize="sentences" enterkeyhint="send" maxlength="2000" disabled>
             <button class="btn" id="btnSend" disabled>send</button>
           </div>
         </div>
