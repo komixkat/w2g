@@ -4,9 +4,10 @@ Watch a local video together, peer-to-peer. No accounts, no uploads, no server.
 
 ## use
 
-1. Enter a name and start a session. Pick a video.
+1. Enter a name and start a room. The invite link appears right away — no video needed yet.
 2. Send the invite link. Your friend opens it, enters a name, and sends back the reply code.
-3. Paste the reply and connect.
+3. Paste the reply and connect. Either side can chat, and the host can pick or change the video at any time.
+4. Use the fullscreen button (or double-click the video) for a distraction-free view; the chat tucks itself into the corner after a few seconds.
 
 Only the host controls playback. The viewer follows the host's position and pause state.
 

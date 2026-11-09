@@ -6,8 +6,8 @@
 <title>w2g — watch together</title>
 <meta name="description" content="Watch the same video file together, peer-to-peer.">
 <meta name="color-scheme" content="dark">
-<meta name="theme-color" content="#050508">
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' fill='%23050508'/%3E%3Ctext x='8' y='12' font-family='monospace' font-size='11' font-weight='bold' fill='%2300ff41' text-anchor='middle'%3Ew%3C/text%3E%3C/svg%3E">
+<meta name="theme-color" content="#0a0a0d">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='3' fill='%230a0a0d'/%3E%3Ctext x='8' y='12' font-family='sans-serif' font-size='11' font-weight='bold' fill='%232ee66b' text-anchor='middle'%3Ew%3C/text%3E%3C/svg%3E">
 <link rel="preload" as="font" type="font/otf" href="./fonts/Monocraft-Bold.otf" crossorigin>
 <link rel="stylesheet" href="./styles.css">
 </head>
@@ -25,120 +25,142 @@
       <h1 class="display">w2g</h1>
       <p class="lede" id="lede">watch the same video file together, peer-to-peer.</p>
       <div class="field">
-        <label class="lbl" for="nameInput">your name</label>
+        <label class="lbl" for="nameInput">Your name</label>
         <input type="text" id="nameInput" placeholder="name" maxlength="24" autocomplete="nickname" autocapitalize="words">
       </div>
       <div class="landing-actions">
-        <button class="btn btn-green" id="btnHost">start a session</button>
-        <button class="btn" id="btnJoin">join a session</button>
+        <button class="btn btn-green" id="btnHost">Start a room</button>
+        <button class="btn" id="btnJoin">Join a room</button>
       </div>
     </div>
   </section>
 
   <section class="view hidden" id="viewRoom">
-    <div class="page">
+    <div class="room" id="roomShell">
 
-      <div class="col-left">
-        <div class="panel stage-panel">
-          <div class="stage">
-            <video id="video" playsinline preload="metadata"></video>
+      <div class="room-main">
+        <div class="stage" id="stage">
+          <video id="video" playsinline preload="metadata"></video>
 
-            <div class="stage-empty" id="stageEmpty">
-              <p class="hidden" id="stageHint"></p>
-              <label class="btn btn-green" for="fileInput">choose video</label>
-              <input type="file" id="fileInput" accept="video/*" hidden>
-            </div>
-
-            <div class="stage-empty hidden" id="stageRemote">
-              <p id="stageRemoteText">no stream</p>
-              <button class="btn btn-green hidden" id="btnWatch">watch</button>
-            </div>
-
-            <div class="stage-flag hidden" id="stagePaused">paused</div>
+          <div class="stage-empty" id="stageEmpty">
+            <p class="hidden" id="stageHint"></p>
+            <label class="btn btn-green" for="fileInput">Choose a video</label>
           </div>
+
+          <div class="stage-empty hidden" id="stageRemote">
+            <p id="stageRemoteText">Waiting for the host</p>
+            <button class="btn btn-green hidden" id="btnWatch">Watch</button>
+          </div>
+
+          <div class="stage-flag hidden" id="stagePaused">Paused</div>
+        </div>
+
+        <div class="under-stage">
           <div class="transport">
             <span class="t-file" id="fileName">&mdash;</span>
-            <span class="transport-right">
+            <div class="transport-right">
               <span class="stat"><b id="statTime">00:00</b><span class="dim"> / </span><span id="statDur">00:00</span></span>
-              <button type="button" class="chip" id="changeFile">change</button>
-            </span>
+              <button type="button" class="chip" id="changeFile">Change video</button>
+              <button type="button" class="icon-btn" id="btnFullscreen" aria-label="Fullscreen" title="Fullscreen" aria-pressed="false">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M8 21H5a2 2 0 0 1-2-2v-3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
+              </button>
+            </div>
           </div>
           <div class="bar"><div class="bar-fill" id="progressFill"></div></div>
         </div>
 
-        <div class="panel" id="connectPanel">
-          <div class="panel-head">
-            <span class="panel-title">connection</span>
-          </div>
-          <div class="panel-body">
+        <details class="rail" id="connectPanel" open>
+          <summary>
+            <span class="rail-title">Connection</span>
+            <span class="rail-state" id="railState">creating room…</span>
+            <svg class="chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+          </summary>
+          <div class="rail-body">
 
             <div class="step hidden" id="stepHost">
               <div class="field">
-                <label class="lbl" for="inviteOut">invite link</label>
+                <label class="lbl" for="inviteOut">Invite link</label>
                 <div class="code-row">
-                  <textarea id="inviteOut" readonly spellcheck="false" autocapitalize="none" autocorrect="off" placeholder="choose a video first"></textarea>
-                  <button type="button" class="chip hidden" id="btnShare" aria-label="share invite link">share</button>
-                  <button type="button" class="chip" data-copy="inviteOut" aria-label="copy invite link">copy</button>
+                  <textarea id="inviteOut" readonly spellcheck="false" autocapitalize="none" autocorrect="off" placeholder="Creating room…"></textarea>
+                  <div class="code-actions">
+                    <button type="button" class="chip hidden" id="btnShare" aria-label="share invite link">Share</button>
+                    <button type="button" class="chip" data-copy="inviteOut" aria-label="copy invite link">Copy</button>
+                  </div>
                 </div>
+                <p class="hint">Send this link to the other person. You can pick a video before or after they join.</p>
               </div>
               <div class="field">
-                <label class="lbl" for="replyIn">reply</label>
+                <label class="lbl" for="replyIn">Their reply</label>
                 <div class="code-row">
-                  <textarea id="replyIn" spellcheck="false" autocapitalize="none" autocorrect="off" placeholder="paste reply"></textarea>
-                  <button type="button" class="chip" data-paste="replyIn" aria-label="paste reply">paste</button>
+                  <textarea id="replyIn" spellcheck="false" autocapitalize="none" autocorrect="off" placeholder="Paste the reply code here"></textarea>
+                  <div class="code-actions">
+                    <button type="button" class="chip" data-paste="replyIn" aria-label="paste reply">Paste</button>
+                  </div>
                 </div>
               </div>
               <div class="btn-row">
-                <button class="btn btn-green" id="btnFinish">connect</button>
-                <button class="btn" id="btnResetHost">reset</button>
+                <button class="btn btn-green" id="btnFinish">Connect</button>
+                <button class="btn" id="btnResetHost">New room</button>
               </div>
             </div>
 
             <div class="step hidden" id="stepGuest">
               <div class="field">
-                <label class="lbl" for="inviteIn">invite</label>
+                <label class="lbl" for="inviteIn">Invite link</label>
                 <div class="code-row">
-                  <textarea id="inviteIn" spellcheck="false" autocapitalize="none" autocorrect="off" placeholder="paste link or code"></textarea>
-                  <button type="button" class="chip" data-paste="inviteIn" aria-label="paste invite">paste</button>
+                  <textarea id="inviteIn" spellcheck="false" autocapitalize="none" autocorrect="off" placeholder="Paste the invite link or code"></textarea>
+                  <div class="code-actions">
+                    <button type="button" class="chip" data-paste="inviteIn" aria-label="paste invite">Paste</button>
+                  </div>
                 </div>
               </div>
               <div class="btn-row">
-                <button class="btn btn-green" id="btnAnswer">generate reply</button>
-                <button class="btn" id="btnResetGuest">reset</button>
+                <button class="btn btn-green" id="btnAnswer">Generate reply</button>
+                <button class="btn" id="btnResetGuest">New room</button>
               </div>
               <div class="field hidden" id="replyWrap">
-                <label class="lbl" for="replyOut">reply</label>
+                <label class="lbl" for="replyOut">Send this reply back</label>
                 <div class="code-row">
                   <textarea id="replyOut" readonly spellcheck="false" autocapitalize="none" autocorrect="off"></textarea>
-                  <button type="button" class="chip" data-copy="replyOut" aria-label="copy reply code">copy</button>
+                  <div class="code-actions">
+                    <button type="button" class="chip" data-copy="replyOut" aria-label="copy reply code">Copy</button>
+                  </div>
                 </div>
+                <p class="hint">Copy it and send it to the host. The room connects when they paste it.</p>
               </div>
             </div>
 
             <div class="connected-note hidden" id="connectedNote">
-              <span class="ok">&#9679;</span>
-              <span>connected</span>
-              <button class="chip" id="btnResetConnected">end</button>
+              <span class="ok"></span>
+              <span>You are connected</span>
+              <button type="button" class="chip" id="btnResetConnected">Start over</button>
             </div>
 
             <div class="error hidden" id="connectError" role="alert"></div>
           </div>
-        </div>
+        </details>
       </div>
 
-      <div class="col-right">
-        <div class="panel chat-panel">
-          <div class="panel-head">
-            <span class="panel-title">chat<span class="caret">_</span></span>
-          </div>
-          <div class="chat-list" id="chatList" role="log" aria-label="chat messages"></div>
-          <div class="chat-input">
-            <input type="text" id="chatText" placeholder="message" autocomplete="off" autocapitalize="sentences" enterkeyhint="send" maxlength="2000" disabled>
-            <button class="btn" id="btnSend" disabled>send</button>
-          </div>
+      <aside class="sidebar" id="chatPanel">
+        <div class="sidebar-head">
+          <span class="sidebar-title">Chat</span>
+          <button type="button" class="icon-btn" id="btnChatToggle" aria-label="Hide chat" title="Hide chat">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+          </button>
         </div>
-      </div>
+        <div class="chat-list" id="chatList" role="log" aria-label="chat messages"></div>
+        <div class="chat-input">
+          <input type="text" id="chatText" placeholder="Message" autocomplete="off" autocapitalize="sentences" enterkeyhint="send" maxlength="2000" disabled>
+          <button type="button" class="btn btn-green" id="btnSend" disabled>Send</button>
+        </div>
+      </aside>
 
+      <button type="button" class="chat-bubble" id="chatBubble" aria-label="Open chat" title="Open chat">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+        <span class="unread" id="chatUnread" hidden></span>
+      </button>
+
+      <input type="file" id="fileInput" accept="video/*" hidden>
     </div>
   </section>
 

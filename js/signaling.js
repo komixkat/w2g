@@ -4,14 +4,9 @@
 const TAG = 'w2g1';
 const COMPRESS = typeof CompressionStream !== 'undefined';
 
-/* Lines the far side can regenerate or live without. Dropping them keeps a
-   code inside the message limit of typical chat apps. */
-const STRIP = /^(a=ssrc|a=msid|a=msid-semantic|a=extmap-allow-mixed|a=rtcp:|a=ice-options)/;
-
-/* Header extensions matter: transport-cc drives the bandwidth estimate and
-   mid keeps bundled RTP demuxable. The rest (orientation, playout-delay,
-   color-space, …) can be left out. */
-const KEEP_EXTMAP = /^a=extmap:\d+ (urn:ietf:params:rtp-hdrext:sdes:mid|http:\/\/www\.ietf\.org\/id\/draft-holmer-rmcat-transport-wide-cc-extensions-01)$/;
+/* Only drop lines that every browser regenerates. Keeping extmaps, codecs and
+   msid data makes the tiny initial offer robust across browsers. */
+const STRIP = /^(a=extmap-allow-mixed|a=ice-options:|a=msid-semantic:)/;
 
 function minify(sdp) {
   const out = [];
@@ -19,10 +14,9 @@ function minify(sdp) {
   for (const line of String(sdp).split('\r\n')) {
     if (line.startsWith('m=')) section++;
     if (STRIP.test(line)) continue;
-    if (line.startsWith('a=extmap') && !KEEP_EXTMAP.test(line)) continue;
     // BUNDLE means every section shares one transport; candidates from the
-    // first section are enough. Repeating them in each section triples that
-    // part of the code.
+    // first section are enough. Repeating them in each section bloats the
+    // code and is never needed with a bundled connection.
     if (line.startsWith('a=candidate:') && section > 0) continue;
     out.push(line);
   }

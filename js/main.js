@@ -20,6 +20,7 @@ const UI = {
   progressFill: $('progressFill'),
 
   connectError: $('connectError'),
+  connectPanel: $('connectPanel'), railState: $('railState'),
   stepHost: $('stepHost'), stepGuest: $('stepGuest'),
   inviteOut: $('inviteOut'), replyIn: $('replyIn'), btnFinish: $('btnFinish'),
   btnResetHost: $('btnResetHost'), btnShare: $('btnShare'),
@@ -27,7 +28,11 @@ const UI = {
   replyWrap: $('replyWrap'), replyOut: $('replyOut'),
   connectedNote: $('connectedNote'), btnResetConnected: $('btnResetConnected'),
 
-  chatList: $('chatList'), chatText: $('chatText'), btnSend: $('btnSend'),
+  chatPanel: $('chatPanel'), chatList: $('chatList'),
+  chatText: $('chatText'), btnSend: $('btnSend'),
+  btnChatToggle: $('btnChatToggle'), chatBubble: $('chatBubble'), chatUnread: $('chatUnread'),
+
+  roomShell: $('roomShell'), btnFullscreen: $('btnFullscreen'),
 
   toasts: $('toasts'),
 };
@@ -53,9 +58,129 @@ const chat = new Chat({ list: UI.chatList, input: UI.chatText, send: UI.btnSend 
 
 UI.nameInput.value = state.name;
 
+/* ── fullscreen + the fading overlay chat ─────────────────── */
+
+const CHAT_IDLE_MS = 4500;
+let chatTimer = null;
+
+function isFullscreen() {
+  return document.fullscreenElement === UI.roomShell;
+}
+
+async function toggleFullscreen() {
+  try {
+    if (document.fullscreenElement) {
+      await document.exitFullscreen();
+      return;
+    }
+    if (!UI.roomShell.requestFullscreen) {
+      toast('fullscreen is not supported in this browser', 'warn');
+      return;
+    }
+    await UI.roomShell.requestFullscreen({ navigationUI: 'hide' });
+  } catch {
+    toast('could not enter fullscreen', 'err');
+  }
+}
+
+function exitFullscreen() {
+  if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+}
+
+function isChatHidden() {
+  return UI.roomShell.classList.contains('chat-hidden');
+}
+
+function setChatHidden(hidden, { schedule = true } = {}) {
+  UI.roomShell.classList.toggle('chat-hidden', hidden);
+  UI.btnChatToggle.setAttribute('aria-label', hidden ? 'Show chat' : 'Hide chat');
+  UI.btnChatToggle.title = hidden ? 'Show chat' : 'Hide chat';
+
+  if (hidden) {
+    clearChatTimer();
+    if (document.activeElement === UI.chatText) UI.chatText.blur();
+    return;
+  }
+
+  clearUnread();
+  if (schedule) scheduleChatHide();
+}
+
+function scheduleChatHide() {
+  clearChatTimer();
+  if (!isFullscreen() || isChatHidden()) return;
+
+  chatTimer = setTimeout(() => {
+    if (isFullscreen() && !isChatHidden()) setChatHidden(true);
+  }, CHAT_IDLE_MS);
+}
+
+function clearChatTimer() {
+  if (chatTimer) clearTimeout(chatTimer);
+  chatTimer = null;
+}
+
+function clearUnread() {
+  UI.chatUnread.hidden = true;
+  UI.chatBubble.classList.remove('has-unread');
+}
+
+function noteIncomingMessage() {
+  if (!isFullscreen()) return;
+  if (!isChatHidden()) {
+    scheduleChatHide();
+    return;
+  }
+  // Chat is out of the way: quietly flag the bubble instead of opening it.
+  UI.chatUnread.hidden = false;
+  UI.chatBubble.classList.remove('has-unread');
+  void UI.chatBubble.offsetWidth;
+  UI.chatBubble.classList.add('has-unread');
+}
+
+UI.btnFullscreen.addEventListener('click', toggleFullscreen);
+UI.video.addEventListener('dblclick', toggleFullscreen);
+
+UI.chatBubble.addEventListener('click', () => {
+  setChatHidden(false);
+  if (isFullscreen()) UI.chatText.focus();
+});
+
+UI.btnChatToggle.addEventListener('click', () => setChatHidden(!isChatHidden()));
+
+UI.chatText.addEventListener('focus', () => {
+  setChatHidden(false, { schedule: false });
+  scheduleChatHide();
+});
+UI.chatText.addEventListener('input', scheduleChatHide);
+UI.chatText.addEventListener('keydown', scheduleChatHide);
+UI.chatText.addEventListener('blur', () => {
+  if (isFullscreen()) scheduleChatHide();
+});
+
+UI.roomShell.addEventListener('pointermove', () => {
+  if (isFullscreen() && !isChatHidden()) scheduleChatHide();
+});
+UI.roomShell.addEventListener('pointerdown', () => {
+  if (isFullscreen() && !isChatHidden()) scheduleChatHide();
+});
+
+document.addEventListener('fullscreenchange', () => {
+  const fs = isFullscreen();
+  UI.btnFullscreen.setAttribute('aria-pressed', String(fs));
+  UI.btnFullscreen.title = fs ? 'Exit fullscreen' : 'Fullscreen';
+  UI.btnFullscreen.setAttribute('aria-label', fs ? 'Exit fullscreen' : 'Fullscreen');
+  UI.video.controls = fs ? true : state.role === 'host';
+
+  setChatHidden(false, { schedule: false });
+  if (fs) scheduleChatHide();
+  else clearChatTimer();
+});
+
+
 /* ── landing ──────────────────────────────────────────────── */
 
-UI.btnHost.addEventListener('click', beginHost);
+UI.btnHost.addEventListener('click', () => beginHost());
 UI.btnJoin.addEventListener('click', () => beginGuest(state.pendingInvite));
 
 UI.nameInput.addEventListener('input', () => {
@@ -92,23 +217,15 @@ function beginHost(restore = false) {
   UI.stepGuest.classList.add('hidden');
   UI.changeFile.classList.remove('hidden');
   UI.video.controls = true;
+  UI.connectPanel.open = true;
+  UI.railState.textContent = 'creating room…';
   setStatus('idle');
 
-  if (player.url && player.meta) {
-    UI.stageEmpty.classList.add('hidden');
-    UI.stageRemote.classList.add('hidden');
-    UI.fileName.textContent = player.meta.name;
-    UI.statDur.textContent = fmtTime(player.meta.duration);
-    startHostSession();
-    return;
-  }
+  // Create room immediately (data channel only, no video needed)
+  startHostSession();
 
-  UI.stageEmpty.classList.remove('hidden');
-  UI.stageRemote.classList.add('hidden');
-  UI.fileName.textContent = '—';
-  if (restore) showHint('session restored — choose your video again');
+  if (restore) showHint('session restored — choose a video to start streaming');
   else UI.stageHint.classList.add('hidden');
-  if (!restore) UI.fileInput.click();
 }
 
 function beginGuest(invite = '', restore = false) {
@@ -137,6 +254,8 @@ function beginGuest(invite = '', restore = false) {
   UI.btnWatch.classList.add('hidden');
   UI.video.controls = false;
   UI.fileName.textContent = '—';
+  UI.connectPanel.open = true;
+  UI.railState.textContent = 'paste the invite';
   setStatus('idle');
 
   if (keptInvite) UI.inviteIn.value = keptInvite;
@@ -164,6 +283,7 @@ function persistName(name) {
 function openRoom() {
   UI.landing.classList.add('hidden');
   UI.room.classList.remove('hidden');
+  setChatHidden(false, { schedule: false });
   window.scrollTo(0, 0);
 }
 
@@ -175,96 +295,7 @@ UI.btnHome.addEventListener('click', () => {
   setStatus('idle');
 });
 
-/* ── host: pick a file, build an invite ───────────────────── */
-
-UI.fileInput.addEventListener('change', async ev => {
-  const file = ev.target.files?.[0];
-  ev.target.value = '';
-  if (!file || state.role !== 'host') return;
-  clearError();
-
-  if (state.connected) {
-    await swapHostFile(file);
-    return;
-  }
-
-  try {
-    const meta = await player.load(file);
-    showHostFile(meta.name, meta.duration);
-    await startHostSession();
-  } catch (err) {
-    fail(err.message);
-    if (!player.url) {
-      UI.stageEmpty.classList.remove('hidden');
-      UI.stageRemote.classList.add('hidden');
-      UI.fileName.textContent = '—';
-    }
-  }
-});
-
-UI.changeFile.addEventListener('click', () => UI.fileInput.click());
-
-function showHostFile(name, duration) {
-  UI.stageHint.classList.add('hidden');
-  UI.stageEmpty.classList.add('hidden');
-  UI.stageRemote.classList.add('hidden');
-  UI.fileName.textContent = name;
-  UI.statDur.textContent = fmtTime(duration);
-  UI.statTime.textContent = '00:00';
-  setProgress(0);
-}
-
-/** Load a new file and put its tracks on the existing peer connection. */
-async function swapHostFile(file) {
-  if (state.swapping) return;
-  state.swapping = true;
-  const link = state.link;
-  const wasPlaying = !UI.video.paused;
-
-  try {
-    // A captured media element will not accept a new source until its old
-    // capture tracks are stopped. The peer connection itself stays up.
-    player.stopCapture();
-    const meta = await player.load(file);
-    showHostFile(meta.name, meta.duration);
-
-    if (!state.connected || state.link !== link) {
-      await startHostSession();
-      return;
-    }
-
-    const stream = player.capture();
-    await link.setStream(stream);
-
-    if (!state.connected || state.link !== link) {
-      await startHostSession();
-      return;
-    }
-
-    link.send({ t: 'meta', name: meta.name, duration: meta.duration });
-
-    if (wasPlaying) {
-      try { await UI.video.play(); } catch { /* they can press play */ }
-    }
-    link.send({
-      t: 'state',
-      paused: UI.video.paused,
-      time: UI.video.currentTime || 0,
-      duration: meta.duration,
-    });
-    setStatus('connected');
-  } catch (err) {
-    // The peer is still connected; let the host try another file.
-    if (state.connected) {
-      toast(err.message, 'err');
-      if (!player.meta) UI.stageEmpty.classList.remove('hidden');
-    } else {
-      fail(err.message);
-    }
-  } finally {
-    state.swapping = false;
-  }
-}
+/* ── host: create room (data channel only), then add video later ───── */
 
 async function startHostSession() {
   teardownLink();
@@ -272,23 +303,25 @@ async function startHostSession() {
   clearError();
   resetCodes();
   setStatus('connecting');
-  UI.inviteOut.placeholder = 'building…';
+  UI.connectPanel.open = true;
+  UI.railState.textContent = 'creating room…';
+  UI.inviteOut.placeholder = 'Building…';
 
   try {
-    const stream = player.capture();
     const link = new Link(handlers());
     state.link = link;
-    const code = await link.hostOffer(stream);
+    const code = await link.hostOffer(); // no stream needed
     if (seq !== sessionSeq) return;
     UI.inviteOut.value = inviteLink(code);
-    UI.inviteOut.placeholder = 'choose a video first';
+    UI.inviteOut.placeholder = 'Room created — send this link';
     UI.replyIn.value = '';
     setStatus('waiting');
+    UI.railState.textContent = 'waiting for the other person';
   } catch (err) {
     if (seq !== sessionSeq) return;
     state.link?.close();
     state.link = null;
-    UI.inviteOut.placeholder = 'choose a video first';
+    UI.inviteOut.placeholder = 'Room creation failed';
     fail(err.message);
   }
 }
@@ -302,7 +335,7 @@ UI.btnFinish.addEventListener('click', async () => {
   clearError();
   const code = UI.replyIn.value.trim();
   if (!code) return showError('paste the reply first');
-  if (!state.link) return showError('choose a video first');
+  if (!state.link) return showError('room not created');
   setStatus('connecting');
   UI.btnFinish.disabled = true;
   UI.btnFinish.textContent = 'connecting…';
@@ -312,7 +345,7 @@ UI.btnFinish.addEventListener('click', async () => {
     fail(err.message);
   } finally {
     UI.btnFinish.disabled = false;
-    UI.btnFinish.textContent = 'connect';
+    UI.btnFinish.textContent = 'Connect';
   }
 });
 
@@ -350,8 +383,10 @@ async function answerInvite() {
   teardownLink();
   const seq = sessionSeq;
   setStatus('connecting');
+  UI.connectPanel.open = true;
+  UI.railState.textContent = 'building reply…';
   UI.btnAnswer.disabled = true;
-  UI.btnAnswer.textContent = 'building…';
+  UI.btnAnswer.textContent = 'Building…';
 
   try {
     const link = new Link(handlers());
@@ -360,8 +395,9 @@ async function answerInvite() {
     if (seq !== sessionSeq) return;
     UI.replyOut.value = reply;
     UI.replyWrap.classList.remove('hidden');
-    UI.stageRemoteText.textContent = 'waiting for host';
+    UI.stageRemoteText.textContent = 'Send the reply code back to the host';
     setStatus('waiting');
+    UI.railState.textContent = 'waiting for the host';
   } catch (err) {
     if (seq !== sessionSeq) return;
     teardownLink();
@@ -369,7 +405,7 @@ async function answerInvite() {
   } finally {
     if (seq === sessionSeq) {
       UI.btnAnswer.disabled = false;
-      UI.btnAnswer.textContent = 'generate reply';
+      UI.btnAnswer.textContent = 'Generate reply';
     }
   }
 }
@@ -395,6 +431,7 @@ function onPeerState(s) {
     setStatus('connecting');
   } else if (s === 'failed') {
     setStatus('error');
+    UI.railState.textContent = 'connection failed';
     showError('connection failed');
   } else if (s === 'closed') {
     setStatus('idle');
@@ -409,22 +446,31 @@ function onChannelOpen() {
   UI.stepHost.classList.add('hidden');
   UI.stepGuest.classList.add('hidden');
   UI.connectedNote.classList.remove('hidden');
+  UI.connectPanel.open = false; // the codes are done; get out of the way
+  UI.railState.textContent = 'connected';
   setStatus('connected');
   clearError();
 
   sendHello();
 
   if (state.role === 'host') {
+    // A video may have been chosen before the room was live. Attach it now.
     if (player.meta) {
+      try {
+        const stream = player.capture();
+        state.link?.setStream(stream);
+      } catch (err) {
+        toast(err.message, 'err');
+      }
       state.link?.send({ t: 'meta', name: player.meta.name, duration: player.meta.duration });
+      const snap = player.snapshot();
+      state.link?.send({
+        t: 'state',
+        paused: snap.paused,
+        time: snap.time,
+        duration: snap.duration,
+      });
     }
-    const snap = player.snapshot();
-    state.link?.send({
-      t: 'state',
-      paused: snap.paused,
-      time: snap.time,
-      duration: snap.duration,
-    });
     grabWakeLock();
   }
 }
@@ -438,10 +484,12 @@ function onChannelClose() {
   chat.clear();
   UI.connectedNote.classList.add('hidden');
   hidePaused();
+  UI.connectPanel.open = true;
+  UI.railState.textContent = 'disconnected';
 
-  // The old codes are dead. Build a fresh invite on the host, and let the
+  // The old codes are dead. Build a fresh room on the host, and let the
   // guest start over with a new one.
-  if (state.role === 'host' && player.url && !state.swapping) {
+  if (state.role === 'host' && !state.swapping) {
     UI.stepHost.classList.remove('hidden');
     UI.stepGuest.classList.add('hidden');
     startHostSession();
@@ -481,6 +529,7 @@ function onChannelData(msg) {
         text,
         ts: msg.ts,
       });
+      noteIncomingMessage();
       break;
     }
     case 'state':
@@ -528,7 +577,6 @@ UI.btnWatch.addEventListener('click', async () => {
     await UI.video.play();
     UI.stageRemote.classList.add('hidden');
   } catch {
-    // Autoplay was refused: leave the controls on so they can start it.
     UI.video.controls = true;
     toast('press play to start', 'warn');
   }
@@ -540,6 +588,63 @@ UI.video.addEventListener('play', () => {
   }
 });
 
+/* ── host: pick/change video file ─────────────────────────── */
+
+UI.fileInput.addEventListener('change', async ev => {
+  const file = ev.target.files?.[0];
+  ev.target.value = '';
+  if (!file || state.role !== 'host') return;
+  clearError();
+
+  try {
+    player.stopCapture();
+    const meta = await player.load(file);
+    showHostFile(meta.name, meta.duration);
+
+    if (!state.connected) {
+      // Room not ready yet — will stream when connection opens
+      return;
+    }
+
+    const stream = player.capture();
+    await state.link?.setStream(stream);
+
+    state.link?.send({ t: 'meta', name: meta.name, duration: meta.duration });
+
+    const snap = player.snapshot();
+    state.link?.send({
+      t: 'state',
+      paused: snap.paused,
+      time: snap.time,
+      duration: snap.duration,
+    });
+    setStatus('connected');
+  } catch (err) {
+    if (state.connected) toast(err.message, 'err');
+    else fail(err.message);
+    if (!player.meta) {
+      UI.fileName.textContent = '—';
+      UI.statDur.textContent = '00:00';
+      UI.statTime.textContent = '00:00';
+      setProgress(0);
+      UI.stageEmpty.classList.remove('hidden');
+      UI.stageRemote.classList.add('hidden');
+    }
+  }
+});
+
+UI.changeFile.addEventListener('click', () => UI.fileInput.click());
+
+function showHostFile(name, duration) {
+  UI.stageHint.classList.add('hidden');
+  UI.stageEmpty.classList.add('hidden');
+  UI.stageRemote.classList.add('hidden');
+  UI.fileName.textContent = name;
+  UI.statDur.textContent = fmtTime(duration);
+  UI.statTime.textContent = '00:00';
+  setProgress(0);
+}
+
 /* ── playback state ───────────────────────────────────────── */
 
 function onLocalState(s, ev) {
@@ -549,7 +654,6 @@ function onLocalState(s, ev) {
 
   if (!state.connected) return;
 
-  // timeupdate fires constantly; everything else is a real user action.
   const now = performance.now();
   if (ev === 'timeupdate' && now - state.lastStateAt < 250) return;
   state.lastStateAt = now;
@@ -600,6 +704,7 @@ function sendChat() {
   chat.add({ name: state.name, text, ts: Date.now(), self: true });
   UI.chatText.value = '';
   UI.chatText.focus();
+  scheduleChatHide();
 }
 
 UI.btnSend.addEventListener('click', sendChat);
@@ -623,6 +728,8 @@ UI.btnResetConnected.addEventListener('click', resetSession);
 
 function leaveRoom() {
   teardownLink();
+  exitFullscreen();
+  setChatHidden(false, { schedule: false });
   clearError();
   resetCodes();
   hidePaused();
@@ -633,6 +740,7 @@ function leaveRoom() {
 
   player.release();
   UI.video.srcObject = null;
+  UI.video.controls = false;
   delete UI.video.dataset.live;
 
   chat.setEnabled(false);
@@ -652,12 +760,15 @@ function leaveRoom() {
 function resetSession() {
   const hadFile = !!player.url;
   teardownLink();
+  exitFullscreen();
+  setChatHidden(false, { schedule: false });
   clearError();
   resetCodes();
   hidePaused();
   state.remoteStream = null;
 
   UI.video.srcObject = null;
+  UI.video.controls = false;
   delete UI.video.dataset.live;
 
   chat.setEnabled(false);
@@ -665,6 +776,8 @@ function resetSession() {
   UI.connectedNote.classList.add('hidden');
   UI.statTime.textContent = '00:00';
   setProgress(0);
+  UI.connectPanel.open = true;
+  UI.railState.textContent = 'starting over…';
 
   if (state.role === 'guest') {
     UI.stageRemote.classList.remove('hidden');
@@ -707,14 +820,14 @@ function teardownLink() {
 
 function resetBusy() {
   UI.btnAnswer.disabled = false;
-  UI.btnAnswer.textContent = 'generate reply';
+  UI.btnAnswer.textContent = 'Generate reply';
   UI.btnFinish.disabled = false;
-  UI.btnFinish.textContent = 'connect';
+  UI.btnFinish.textContent = 'Connect';
 }
 
 function resetCodes() {
   UI.inviteOut.value = '';
-  UI.inviteOut.placeholder = 'choose a video first';
+  UI.inviteOut.placeholder = 'Room not created yet';
   UI.replyIn.value = '';
   UI.inviteIn.value = '';
   UI.replyOut.value = '';
@@ -843,12 +956,11 @@ if (navigator.share) UI.btnShare.classList.remove('hidden');
 
 UI.btnShare.addEventListener('click', async () => {
   const url = UI.inviteOut.value.trim();
-  if (!url) return toast('choose a video first', 'warn');
+  if (!url) return toast('room not created yet', 'warn');
   try {
     await navigator.share({ title: 'w2g — watch together', text: 'watch together', url });
   } catch (err) {
     if (err?.name === 'AbortError') return;
-    // Some desktops expose share but cannot hand off a custom URL.
     if (await copyText(url)) toast('invite copied');
     else toast('could not share', 'err');
   }
@@ -920,7 +1032,7 @@ if (invited) {
     state.name = name;
     if (room.role === 'host') {
       beginHost(true);
-      toast('room restored — choose your video again', 'warn');
+      toast('room restored — choose a video to start streaming', 'warn');
     } else {
       beginGuest('', true);
       toast('room restored — reconnect to watch', 'warn');
